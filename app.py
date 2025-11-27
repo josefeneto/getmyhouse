@@ -13,6 +13,7 @@ import streamlit as st
 import pandas as pd
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -24,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import project modules
-from src.config import UIConfig, SearchConfig, AppConfig, FeatureFlags
+from src.config import UIConfig, SearchConfig, AppConfig, FeatureFlags, ADKConfig
 from src.agents.coordinator import create_coordinator_agent
 from src.tools.mock_search_tool import MockSearchTool
 
@@ -141,17 +142,13 @@ def render_search_form() -> Optional[Dict[str, Any]]:
     """
     st.header("🔍 Property Search")
     
-    # Check if we're refining a previous search
-    last_params = get_last_search_params()
-    is_refinement = st.checkbox(
-        "Refine Previous Search",
-        value=False,
-        help="Load parameters from your last search for refinement"
-    ) if last_params else False
+    # Initialize form counter for clearing (v2.1.5)
+    if "form_counter" not in st.session_state:
+        st.session_state.form_counter = 0
     
     # Initialize selected country in session state (v2.0.2)
     if "selected_country" not in st.session_state:
-        st.session_state.selected_country = last_params.get("country", SearchConfig.DEFAULT_COUNTRY) if is_refinement and last_params else SearchConfig.DEFAULT_COUNTRY
+        st.session_state.selected_country = SearchConfig.DEFAULT_COUNTRY
     
     # Country Selection (OUTSIDE form to allow real-time updates) - v2.0.2
     st.subheader("🌍 Select Country (195 countries supported!)")
@@ -172,16 +169,19 @@ def render_search_form() -> Optional[Dict[str, Any]]:
     
     st.markdown("---")  # Visual separator
     
-    # Clear form button (outside form to work properly)
-    col_clear1, col_clear2 = st.columns([3, 1])
-    with col_clear2:
-        if st.button("🗑️ Clear Form", use_container_width=True):
-            # Clear session state
-            for key in list(st.session_state.keys()):
-                if key.startswith('search_'):
-                    del st.session_state[key]
-            # Reset to default country
+    # Clear form button (MUST be outside form)
+    col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
+    with col_btn2:
+        if st.button("🗑️ Clear All", key="clear_form_btn", type="secondary", use_container_width=True):
+            # Increment form counter to force widget recreation
+            st.session_state.form_counter += 1
+            # Clear search results
+            if UIConfig.SESSION_KEY_RESULTS in st.session_state:
+                del st.session_state[UIConfig.SESSION_KEY_RESULTS]
+            # Reset country to default
             st.session_state.selected_country = SearchConfig.DEFAULT_COUNTRY
+            st.success("✅ Form cleared!")
+            time.sleep(0.3)
             st.rerun()
     
     with st.form("search_form"):
@@ -192,10 +192,10 @@ def render_search_form() -> Optional[Dict[str, Any]]:
             # Location
             location = st.text_input(
                 "Location *",
-                value=last_params.get("location", "") if is_refinement and last_params else "",
+                value="",
                 placeholder="e.g., City, metropolitan area, state, region, etc.",
                 help="City, metropolitan area, state, or region",
-                key="search_location"
+                key=f"search_location_{st.session_state.form_counter}"
             )
         
         # Second row: Distance and Public Transport
@@ -207,7 +207,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
                 "Max Distance to Location (km)",
                 options=SearchConfig.DISTANCE_OPTIONS,
                 index=5,  # Default to "any"
-                help="Maximum acceptable distance from specified location (in kilometers)"
+                help="Maximum acceptable distance from specified location (in kilometers)",
+                key=f"distance_{st.session_state.form_counter}"
             )
         
         with col2_2:
@@ -216,7 +217,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
                 "Public Transport (walking minutes)",
                 options=SearchConfig.TRANSPORT_OPTIONS,
                 index=3,
-                help="Maximum acceptable walking time to public transport (in minutes)"
+                help="Maximum acceptable walking time to public transport (in minutes)",
+                key=f"transport_{st.session_state.form_counter}"
             )
         
         # Third row: Property Type and Typology
@@ -227,9 +229,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
             property_type = st.selectbox(
                 "Property Type *",
                 options=SearchConfig.PROPERTY_TYPES,
-                index=SearchConfig.PROPERTY_TYPES.index(last_params.get("property_type", "flat")) 
-                      if is_refinement and last_params and last_params.get("property_type") in SearchConfig.PROPERTY_TYPES 
-                      else 1
+                index=0,  # Default to "any"
+                key=f"property_type_{st.session_state.form_counter}"
             )
         
         with col3_2:
@@ -237,8 +238,9 @@ def render_search_form() -> Optional[Dict[str, Any]]:
             typology = st.multiselect(
                 "Typology *",
                 options=SearchConfig.TYPOLOGIES,
-                default=last_params.get("typology", []) if is_refinement and last_params else [],
-                help="Select one or more bedroom configurations"
+                default=[],
+                help="Select one or more bedroom configurations",
+                key=f"typology_{st.session_state.form_counter}"
             )
         
         # Fourth row: WCs and Usage State
@@ -250,7 +252,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
                 "Number of WCs",
                 options=[1, 2, 3, "any"],
                 index=3,
-                help="Number of bathrooms/WCs"
+                help="Number of bathrooms/WCs",
+                key=f"wcs_{st.session_state.form_counter}"
             )
         
         with col4_2:
@@ -259,7 +262,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
                 "Usage State",
                 options=SearchConfig.USAGE_STATES,
                 index=0,  # Default: "any"
-                help="Condition of the property"
+                help="Condition of the property",
+                key=f"usage_state_{st.session_state.form_counter}"
             )
         
         # Fifth row: Max Results and Price Range (Currency removed - shown at top)
@@ -271,7 +275,8 @@ def render_search_form() -> Optional[Dict[str, Any]]:
                 "Max Results",
                 options=SearchConfig.MAX_RESULTS_OPTIONS,
                 index=1,  # Default to 20
-                help="Maximum number of properties to return"
+                help="Maximum number of properties to return",
+                key=f"max_results_{st.session_state.form_counter}"
             )
         
         with col5_2:
@@ -279,9 +284,10 @@ def render_search_form() -> Optional[Dict[str, Any]]:
             price_min = st.number_input(
                 "Price From",
                 min_value=0,
-                value=last_params.get("price_min", 0) if is_refinement and last_params else 0,
+                value=0,
                 step=10000,
-                format="%d"
+                format="%d",
+                key=f"price_min_{st.session_state.form_counter}"
             )
         
         with col5_3:
@@ -289,16 +295,18 @@ def render_search_form() -> Optional[Dict[str, Any]]:
             price_max = st.number_input(
                 "Price To",
                 min_value=0,
-                value=last_params.get("price_max", 500000) if is_refinement and last_params else 500000,
+                value=500000,
                 step=10000,
-                format="%d"
+                format="%d",
+                key=f"price_max_{st.session_state.form_counter}"
             )
         
         # Sixth row: Other Requirements (full width)
         st.markdown("**Additional Requirements** (optional)")
         other_requirements = st.text_area(
             "Other Requirements",
-            value=last_params.get("other_requirements", "") if is_refinement and last_params else "",
+            value="",
+            key=f"other_requirements_{st.session_state.form_counter}",
             placeholder="Any other specific requirements (e.g., 'must have parking', 'near school', etc.)",
             height=100,
             label_visibility="collapsed"
@@ -359,6 +367,15 @@ def render_results(results: Dict[str, Any]):
         return
     
     st.header("📋 Search Results")
+    
+    # Info about link types
+    st.info("""
+    🔗 **About Property Links:**
+    - 🎯 **Direct Links**: Go directly to property listing (when available)
+    - 🔍 **Search Links**: Google search for the property (when direct link unavailable)
+    
+    Some links may not work if properties were sold or URLs changed.
+    """)
     
     # Check for errors
     if "error" in results:
@@ -462,20 +479,31 @@ async def execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
         
         if FeatureFlags.ENABLE_REAL_SCRAPING:
             try:
+                logger.info(f"  🔍 ENABLE_REAL_SCRAPING is TRUE - Starting real search...")
                 logger.info(f"  🔍 Using Discovery Agent + LLM for {location}, {country}...")
                 
                 from src.tools.real_search_tool import RealSearchTool
+                logger.info(f"  ✅ RealSearchTool imported successfully")
+                
                 real_tool = RealSearchTool()
+                logger.info(f"  ✅ RealSearchTool instance created")
                 
                 # Search using Discovery + LLM + Google Search
                 # 1. Discovery Agent finds real estate sites for country
                 # 2. LLM searches Google with site: filters
                 # 3. LLM extracts properties from search snippets
                 # Works for ANY country!
+                logger.info(f"  🚀 Calling real_tool.search_properties()...")
+                logger.info(f"     Parameters: country={country}, location={location}")
+                logger.info(f"     Max results: {params.get('max_results', 20)}")
+                
                 properties = await real_tool.search_properties(
                     requirements=params,
                     max_results=params.get("max_results", 20)
                 )
+                
+                logger.info(f"  ✅ real_tool.search_properties() returned!")
+                logger.info(f"  ✅ Properties count: {len(properties) if properties else 0}")
                 
                 if properties:
                     logger.info(f"  ✅ Found {len(properties)} REAL properties from web!")
@@ -484,9 +512,15 @@ async def execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"  💡 Fallback to mock data...")
                     
             except Exception as e:
-                logger.error(f"  ❌ Real search failed: {str(e)}")
+                import traceback
+                logger.error(f"  ❌ Real search failed with exception!")
+                logger.error(f"  ❌ Error type: {type(e).__name__}")
+                logger.error(f"  ❌ Error message: {str(e)}")
+                logger.error(f"  ❌ Full traceback:")
+                logger.error(traceback.format_exc())
                 logger.info(f"  💡 Fallback to mock data...")
         else:
+            logger.warning(f"  ⚠️  ENABLE_REAL_SCRAPING is FALSE!")
             logger.info(f"  ⏭️  Real search disabled (ENABLE_REAL_SCRAPING=false)")
         
         # Fallback to mock ONLY if real search returned nothing
@@ -573,6 +607,14 @@ def run_search(params: Dict[str, Any]):
 
 def main():
     """Main application entry point."""
+    # Log configuration
+    logger.info("=" * 60)
+    logger.info(f"🚀 GetMyHouse v{AppConfig.VERSION} Starting...")
+    logger.info(f"📊 Configuration:")
+    logger.info(f"   ENABLE_REAL_SCRAPING = {FeatureFlags.ENABLE_REAL_SCRAPING}")
+    logger.info(f"   Model: {ADKConfig.MODEL_NAME}")
+    logger.info("=" * 60)
+    
     # Initialize session state
     initialize_session_state()
     

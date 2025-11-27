@@ -232,52 +232,33 @@ class CoordinatorAgent:
         # Check if real scraping is enabled
         enable_real_scraping = FeatureFlags.ENABLE_REAL_SCRAPING
         
-        if discovered_sites and len(discovered_sites) > 0:
-            site_names = [site.get('name', 'Unknown') for site in discovered_sites[:3]]
-            logger.info(f"🌐 Discovery Agent found {len(discovered_sites)} websites:")
-            for i, site in enumerate(discovered_sites[:5], 1):
-                logger.info(f"  {i}. {site.get('name', 'Unknown')} - {site.get('domain', 'N/A')}")
+        if enable_real_scraping:
+            logger.info(f"🔍 ENABLE_REAL_SCRAPING=true - Using LLM + Google Search")
             
-            if enable_real_scraping:
-                logger.info(f"🔍 ENABLE_REAL_SCRAPING=true - Attempting real web scraping...")
+            # Use RealSearchTool with Discovery + Google Search (v2.1+)
+            try:
+                from src.tools.real_search_tool import RealSearchTool
+                real_tool = RealSearchTool()
                 
-                # Try real search tool
-                try:
-                    from src.tools.real_search_tool import RealSearchTool
-                    real_tool = RealSearchTool()
-                    
-                    # Try to scrape each discovered site
-                    for site in discovered_sites[:3]:  # Try top 3 sites
-                        logger.info(f"  🌐 Attempting to scrape: {site.get('name')}...")
-                        site_properties = real_tool.search_properties(
-                            site_info=site,
-                            requirements=requirements,
-                            max_results=requirements.get("max_results", 20)
-                        )
-                        
-                        if site_properties:
-                            properties.extend(site_properties)
-                            logger.info(f"  ✅ Found {len(site_properties)} properties from {site.get('name')}")
-                        else:
-                            logger.warning(f"  ⚠️  No properties scraped from {site.get('name')} (parsing not implemented)")
-                    
-                    if properties:
-                        logger.info(f"✅ Real scraping returned {len(properties)} total properties")
-                        return properties
-                    else:
-                        logger.warning("⚠️  Real scraping returned 0 properties - falling back to mock data")
-                        logger.info("💡 Reason: Site-specific parsing not yet implemented for discovered websites")
-                        logger.info("📦 Using mock data as fallback to provide results")
+                # Search using new LLM + Google Search approach
+                logger.info(f"  🌐 Starting Discovery + LLM search...")
+                properties = await real_tool.search_properties(
+                    requirements=requirements,
+                    max_results=requirements.get("max_results", 20)
+                )
                 
-                except Exception as e:
-                    logger.error(f"❌ Real scraping failed: {str(e)}")
-                    logger.info("📦 Falling back to mock data")
-            else:
-                logger.info(f"📦 ENABLE_REAL_SCRAPING=false - Using mock data")
-                logger.info(f"💡 To enable real scraping: Set ENABLE_REAL_SCRAPING=true in .env")
-                logger.info(f"⚠️  Note: Real scraping requires site-specific parsers (not yet implemented)")
+                if properties:
+                    logger.info(f"  ✅ Found {len(properties)} REAL properties!")
+                    return properties
+                else:
+                    logger.warning("  ⚠️  LLM search returned 0 properties - falling back to mock data")
+            
+            except Exception as e:
+                logger.error(f"❌ Real search failed: {str(e)}")
+                logger.info("📦 Falling back to mock data")
         else:
-            logger.info(f"📦 No sites discovered - using mock data")
+            logger.info(f"📦 ENABLE_REAL_SCRAPING=false - Using mock data")
+            logger.info(f"💡 To enable real scraping: Set ENABLE_REAL_SCRAPING=true in .env")
         
         # Fallback to mock data
         logger.info("🔄 Using MockSearchTool for stable results...")

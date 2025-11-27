@@ -141,53 +141,78 @@ class RealSearchTool:
         No HTML scraping needed!
         """
         try:
+            # Normalize location (Portuguese to English for better results)
+            location_normalized = self._normalize_location(location, country)
+            
             # Build site filter for Google Search
             site_filter = " OR ".join([f"site:{s}" for s in sites])
             
             # Build search description
             typology_str = " or ".join(typology) if typology else "any size"
-            type_str = "apartment" if property_type == "flat" else property_type
             
-            # Build prompt for LLM
-            prompt = f"""Search for properties to BUY (not rent) in {location}, {country}:
+            # Handle property_type "any"
+            if property_type == "any":
+                type_str = "apartment OR house OR flat"
+            else:
+                type_str = "apartment" if property_type == "flat" else property_type
+            
+            # Build prompt for LLM with VERY specific instructions
+            prompt = f"""You are searching for real estate properties to BUY (NOT rent).
 
-Property Type: {type_str}
-Bedrooms/Typology: {typology_str}
-Price Range: {price_min:,} - {price_max:,} {currency}
+TARGET LOCATION: Search in BOTH "{location}" AND "{location_normalized}", {country}
+- Try searches with BOTH location names
+- Include nearby areas if needed to get {max_results}+ results
 
-Search on these real estate websites: {site_filter}
+SEARCH CRITERIA:
+- Property Type: {type_str}
+- Bedrooms: {typology_str}
+- Price Range: {price_min:,} - {price_max:,} {currency}
+- Websites: {site_filter}
 
-Use Google Search to find property listings matching these criteria.
-Extract property information from the search result SNIPPETS and URLs.
+YOUR TASK:
+1. Use Google Search to find AT LEAST {max_results} property listings
+2. Extract information from the search result SNIPPETS ONLY
+3. Return a JSON array of properties
 
-YOU MUST return ONLY a valid JSON array, nothing else.
-Do NOT include explanations, markdown, or any text outside the JSON.
+CRITICAL - URLs:
+- ONLY include a URL if you can see the COMPLETE, REAL property URL in the search snippet
+- The URL MUST be a direct link to a specific property listing
+- The URL MUST start with https:// and be from one of: {', '.join(sites)}
+- If you're not 100% sure the URL is correct, set it to null
+- DO NOT generate, guess, or construct URLs
+- DO NOT use homepage URLs or search result URLs
+- BETTER TO HAVE null URL than wrong URL
 
-Return this EXACT format:
+CRITICAL - Data Quality:
+- Extract ONLY information you can see in the snippets
+- Use null for fields not available in snippets
+- DO NOT make up or guess any information
+- If you find fewer than {max_results} properties with valid URLs, that's OK
+
+OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no text):
 [
   {{
-    "title": "Property title from search result",
+    "title": "Exact title from snippet",
     "price": 250000,
-    "location": "City/area",
+    "location": "City/neighborhood from snippet",
     "typology": "T2",
+    "property_type": "flat",
     "size_sqm": 85,
     "rooms": 2,
-    "url": "https://full-url-from-search",
+    "wcs": 1,
+    "usage_state": "used",
+    "transport_minutes": null,
+    "agency": "Agency name if visible",
+    "url": "https://full-real-url-from-snippet-or-null",
     "source": "Website name",
-    "description": "Brief description"
+    "description": "Brief description from snippet"
   }}
 ]
 
-CRITICAL RULES:
-1. Return ONLY the JSON array - NO other text
-2. Use REAL data from actual search results
-3. URLs must be from actual search results
-4. Return up to {max_results} properties
-5. If no properties found, return []
-6. Prices must be numeric (no currency symbols)
-7. VALID JSON ONLY - test it before returning
+EXAMPLE GOOD URL: "https://www.idealista.pt/imovel/12345678/"
+EXAMPLE BAD URL (set to null): "https://www.idealista.pt/", "https://example.com/property"
 
-Search now and return the JSON array."""
+NOW: Search for properties and return ONLY the JSON array."""
             
             # Call LLM with Google Search
             config = GenerateContentConfig(
@@ -195,6 +220,14 @@ Search now and return the JSON array."""
                 tools=[Tool(google_search=GoogleSearchTool())],  # Correct field!
                 response_modalities=["TEXT"]
             )
+            
+            logger.info(f"  📝 Search parameters:")
+            logger.info(f"     Location: '{location}' → '{location_normalized}'")
+            logger.info(f"     Type: '{property_type}' → '{type_str}'")
+            logger.info(f"     Sites: {len(sites)} discovered")
+            logger.info(f"     Max results: {max_results}")
+            
+            logger.info(f"  🤖 Calling LLM with Google Search (this may take 30-60 seconds)...")
             
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -208,7 +241,7 @@ Search now and return the JSON array."""
             # Log response for debugging
             logger.debug(f"  LLM Response (first 500 chars): {response_text[:500]}")
             
-            properties = self._extract_properties(response_text)
+            properties = self._extract_properties(response_text, country, location)
             
             return properties
             
@@ -216,12 +249,100 @@ Search now and return the JSON array."""
             logger.error(f"  ❌ Google Search failed: {str(e)}")
             return []
     
-    def _extract_properties(self, response_text: str) -> List[Dict]:
+    def _normalize_location(self, location: str, country: str) -> str:
+        """
+        Normalize location names to English for better search results.
+        
+        Many real estate sites use English names.
+        
+        Args:
+            location: Original location name
+            country: Country name
+            
+        Returns:
+            Normalized (English) location name
+        """
+        # Common location mappings by country
+        location_mappings = {
+            "Portugal": {
+                "lisboa": "lisbon",
+                "porto": "porto",  # Already English
+                "coimbra": "coimbra",  # Keep as is
+                "braga": "braga",
+                "setúbal": "setubal",
+                "faro": "faro",
+                "évora": "evora",
+                "aveiro": "aveiro",
+                "viseu": "viseu",
+                "leiria": "leiria"
+            },
+            "Spain": {
+                "madrid": "madrid",
+                "barcelona": "barcelona",
+                "valencia": "valencia",
+                "sevilla": "seville",
+                "zaragoza": "zaragoza",
+                "málaga": "malaga",
+                "murcia": "murcia",
+                "palma": "palma"
+            },
+            "Italy": {
+                "roma": "rome",
+                "milano": "milan",
+                "napoli": "naples",
+                "torino": "turin",
+                "palermo": "palermo",
+                "genova": "genoa",
+                "bologna": "bologna",
+                "firenze": "florence",
+                "venezia": "venice"
+            },
+            "France": {
+                "paris": "paris",
+                "marseille": "marseille",
+                "lyon": "lyon",
+                "toulouse": "toulouse",
+                "nice": "nice",
+                "nantes": "nantes",
+                "strasbourg": "strasbourg",
+                "montpellier": "montpellier",
+                "bordeaux": "bordeaux"
+            },
+            "Germany": {
+                "berlin": "berlin",
+                "münchen": "munich",
+                "hamburg": "hamburg",
+                "köln": "cologne",
+                "frankfurt": "frankfurt",
+                "stuttgart": "stuttgart",
+                "düsseldorf": "dusseldorf",
+                "dortmund": "dortmund",
+                "essen": "essen"
+            }
+        }
+        
+        # Normalize to lowercase for comparison
+        location_lower = location.lower().strip()
+        
+        # Check if we have a mapping for this country
+        if country in location_mappings:
+            # Check if location needs normalization
+            if location_lower in location_mappings[country]:
+                normalized = location_mappings[country][location_lower]
+                logger.info(f"  🌍 Normalized location: '{location}' → '{normalized}'")
+                return normalized
+        
+        # Return original if no mapping found
+        return location
+    
+    def _extract_properties(self, response_text: str, country: str, location: str) -> List[Dict]:
         """
         Extract property data from LLM response.
         
         Args:
             response_text: LLM response with JSON
+            country: Country name for fallback search URLs
+            location: Location name for fallback search URLs
             
         Returns:
             List of property dictionaries
@@ -274,11 +395,63 @@ Search now and return the JSON array."""
             
             # Validate and clean properties
             valid_properties = []
+            skipped_count = 0
+            null_url_count = 0
+            
             for prop in properties:
                 if isinstance(prop, dict) and "title" in prop and "price" in prop:
+                    # Ensure URL is valid OR null (we'll handle null later)
+                    url = prop.get("url", None)
+                    
+                    # Accept null URLs (LLM wasn't sure)
+                    if url is None or url == "null":
+                        null_url_count += 1
+                        # Create a search URL as fallback
+                        search_query = f"{prop.get('title', '')} {prop.get('location', '')} {country}".replace(' ', '+')
+                        prop["url"] = f"https://www.google.com/search?q={search_query}"
+                        prop["url_type"] = "search"
+                        logger.info(f"  🔍 Created search URL for: {prop.get('title', 'Unknown')[:50]}")
+                    else:
+                        # Strict URL validation for non-null URLs
+                        if url == "#":
+                            skipped_count += 1
+                            logger.warning(f"  ⚠️  Skipped (# URL): {prop.get('title', 'Unknown')[:50]}")
+                            continue
+                        
+                        if not url.startswith("http"):
+                            skipped_count += 1
+                            logger.warning(f"  ⚠️  Skipped (invalid protocol): {url[:50]}")
+                            continue
+                        
+                        # Check if URL looks like a real property listing
+                        if len(url) < 25:  # Real property URLs are longer
+                            skipped_count += 1
+                            logger.warning(f"  ⚠️  Skipped (URL too short): {url}")
+                            continue
+                        
+                        # Check for common fake/generic URL patterns
+                        fake_patterns = ["example.com", "test.com", "domain.com", "website.com"]
+                        homepage_indicators = ["/search", "/comprar", "/buy", "/venda"]
+                        
+                        url_lower = url.lower()
+                        if any(pattern in url_lower for pattern in fake_patterns):
+                            skipped_count += 1
+                            logger.warning(f"  ⚠️  Skipped (fake domain): {url[:50]}")
+                            continue
+                        
+                        # Check if it's a homepage/search page (not specific property)
+                        # Real property URLs have unique IDs or slugs
+                        if url.rstrip('/').count('/') < 3:  # Too few path segments
+                            # Could be homepage, convert to search
+                            null_url_count += 1
+                            search_query = f"{prop.get('title', '')} {prop.get('location', '')} {country}".replace(' ', '+')
+                            prop["url"] = f"https://www.google.com/search?q={search_query}"
+                            prop["url_type"] = "search"
+                            logger.info(f"  🔍 Converted generic URL to search for: {prop.get('title', 'Unknown')[:50]}")
+                        else:
+                            prop["url_type"] = "direct"
+                    
                     # Ensure required fields exist
-                    if not prop.get("url"):
-                        prop["url"] = "#"
                     if not prop.get("source"):
                         prop["source"] = "Web Search"
                     if not prop.get("typology"):
@@ -286,7 +459,20 @@ Search now and return the JSON array."""
                     if not prop.get("location"):
                         prop["location"] = "Unknown"
                     
+                    # Ensure numeric fields are numeric or None
+                    for field in ['price', 'size_sqm', 'rooms', 'wcs', 'transport_minutes']:
+                        if field in prop and prop[field] is not None:
+                            try:
+                                prop[field] = float(prop[field]) if '.' in str(prop[field]) else int(prop[field])
+                            except (ValueError, TypeError):
+                                prop[field] = None
+                    
                     valid_properties.append(prop)
+            
+            if skipped_count > 0:
+                logger.info(f"  ⚠️  Skipped {skipped_count} properties with invalid URLs")
+            if null_url_count > 0:
+                logger.info(f"  🔍 Created {null_url_count} search URLs for properties without direct links")
             
             if valid_properties:
                 logger.info(f"  ✅ Extracted {len(valid_properties)} valid properties")

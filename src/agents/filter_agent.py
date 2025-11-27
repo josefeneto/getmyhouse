@@ -195,7 +195,11 @@ class FilterAgent:
         price_min = requirements.get("price_min", 0)
         price_max = requirements.get("price_max", float('inf'))
         
-        if price_min <= price <= price_max:
+        # Handle null/None prices (properties without price info)
+        if price is None:
+            # Give partial score - we don't know if it's in range
+            score += weights["price"] * 0.5
+        elif price_min <= price <= price_max:
             # Full score if in range
             score += weights["price"]
         elif price < price_min:
@@ -219,14 +223,19 @@ class FilterAgent:
         if req_transport is not None and req_transport != "any":
             prop_transport = property_data.get("transport_distance", float('inf'))
             
-            # Convert req_transport to int if it's a string
-            try:
-                req_transport_int = int(req_transport) if isinstance(req_transport, str) else req_transport
-                if prop_transport <= req_transport_int:
-                    score += weights["transport"]
-            except (ValueError, TypeError):
-                # If conversion fails, give half weight
+            # Handle null transport distance
+            if prop_transport is None:
+                # Give partial score - we don't know the distance
                 score += weights["transport"] * 0.5
+            else:
+                # Convert req_transport to int if it's a string
+                try:
+                    req_transport_int = int(req_transport) if isinstance(req_transport, str) else req_transport
+                    if prop_transport <= req_transport_int:
+                        score += weights["transport"]
+                except (ValueError, TypeError):
+                    # If conversion fails, give half weight
+                    score += weights["transport"] * 0.5
         else:
             score += weights["transport"] * 0.5
         

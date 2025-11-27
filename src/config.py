@@ -37,7 +37,7 @@ class AppConfig:
     
     # Application metadata
     NAME = "GetMyHouse"
-    VERSION = "2.1.1"  # v2.1.1: Improved JSON parsing + logging + UX
+    VERSION = "2.2.1"  # v2.2.1: Fixed None display (show N/A instead of "none")
     DESCRIPTION = "AI-Powered Property Search System"
     
     # Port configuration (for Railway)
@@ -313,7 +313,7 @@ class SearchConfig:
     DISTANCE_OPTIONS = [1, 2, 5, 10, 20, "any"]
     
     # Property types
-    PROPERTY_TYPES = ["house", "flat"]
+    PROPERTY_TYPES = ["any", "flat", "house"]
     
     # Typologies
     TYPOLOGIES = ["T0", "T1", "T2", "T3", "T4", "T4+"]

@@ -8,6 +8,7 @@ Based on Google ADK Day 1 concepts: Specialized agents with focused output gener
 """
 
 import logging
+import re
 from typing import Any, Dict, List
 from io import BytesIO
 
@@ -89,7 +90,7 @@ class ReportAgent:
         
         try:
             # Format properties for display
-            table_data = self._format_table_data(properties)
+            table_data = self._format_table_data(properties, requirements)
             
             # Generate summary statistics
             summary = self._generate_summary(properties, requirements)
@@ -115,7 +116,8 @@ class ReportAgent:
     
     def _format_table_data(
         self,
-        properties: List[Dict[str, Any]]
+        properties: List[Dict[str, Any]],
+        requirements: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
         Format property data for table display.
@@ -124,11 +126,15 @@ class ReportAgent:
         
         Args:
             properties: Raw property data
+            requirements: Search requirements (for currency)
             
         Returns:
             List of formatted property dictionaries
         """
         formatted = []
+        
+        # Get currency symbol from requirements
+        currency_symbol = requirements.get("currency_symbol", "€")
         
         for idx, prop in enumerate(properties, 1):
             formatted_prop = {
@@ -136,11 +142,11 @@ class ReportAgent:
                 "Location": prop.get("location", "N/A"),
                 "Type": prop.get("type", "N/A"),
                 "Typology": prop.get("typology", "N/A"),
-                "Price (EUR)": f"€{prop.get('price', 0):,}",
-                "WCs": prop.get("wcs", "N/A"),
-                "State": prop.get("state", "N/A"),
-                "Transport (min)": prop.get("transport_distance", "N/A"),
-                "Agency": prop.get("agency", "N/A"),
+                "Price": f"{currency_symbol}{price:,}" if (price := prop.get('price')) is not None else "Price on request",
+                "WCs": prop.get("wcs") if prop.get("wcs") is not None else "N/A",
+                "State": prop.get("state") if prop.get("state") is not None else "N/A",
+                "Transport (min)": prop.get("transport_distance") if prop.get("transport_distance") is not None else "N/A",
+                "Agency": prop.get("agency") if prop.get("agency") is not None else "N/A",
                 "Match Score": f"{prop.get('match_score', 0):.0%}",
                 "Link": prop.get("url", "N/A"),
             }
@@ -166,6 +172,9 @@ class ReportAgent:
         if not properties:
             return {"total": 0}
         
+        # Get currency symbol from requirements
+        currency_symbol = requirements.get("currency_symbol", "€")
+        
         prices = [p.get("price", 0) for p in properties if p.get("price")]
         scores = [p.get("match_score", 0) for p in properties if p.get("match_score")]
         
@@ -175,9 +184,9 @@ class ReportAgent:
             "search_location": requirements.get("location", "N/A"),
             "search_type": requirements.get("property_type", "N/A"),
             "price_range": {
-                "min": f"€{min(prices):,}" if prices else "N/A",
-                "max": f"€{max(prices):,}" if prices else "N/A",
-                "avg": f"€{int(sum(prices) / len(prices)):,}" if prices else "N/A",
+                "min": f"{currency_symbol}{min(prices):,}" if prices else "N/A",
+                "max": f"{currency_symbol}{max(prices):,}" if prices else "N/A",
+                "avg": f"{currency_symbol}{int(sum(prices) / len(prices)):,}" if prices else "N/A",
             },
             "match_score": {
                 "avg": f"{sum(scores) / len(scores):.0%}" if scores else "N/A",
@@ -236,7 +245,7 @@ class ReportAgent:
                         "Location": row["Location"],
                         "Type": row["Type"],
                         "Typology": row["Typology"],
-                        "Price (EUR)": self._extract_price(row["Price (EUR)"]),
+                        "Price": self._extract_price(row["Price"]),
                         "WCs": row["WCs"],
                         "State": row["State"],
                         "Transport (min)": row["Transport (min)"],
@@ -305,15 +314,22 @@ class ReportAgent:
         Extract numeric price from formatted string.
         
         Args:
-            price_str: Formatted price string (e.g., "€123,456")
+            price_str: Formatted price string (e.g., "€123,456", "$123,456", "£123,456", "Price on request")
             
         Returns:
-            Numeric price value
+            Numeric price value (0.0 if not a number)
         """
         try:
-            # Remove currency symbol and commas
-            numeric_str = price_str.replace('€', '').replace(',', '').strip()
-            return float(numeric_str)
+            # Handle "Price on request" or similar
+            if not any(c.isdigit() for c in str(price_str)):
+                return 0.0
+            
+            # Remove all non-numeric characters except digits, dots, and commas
+            # This handles any currency symbol (€, $, £, ¥, etc)
+            numeric_str = re.sub(r'[^\d,.]', '', str(price_str))
+            # Remove commas (thousand separators)
+            numeric_str = numeric_str.replace(',', '')
+            return float(numeric_str) if numeric_str else 0.0
         except (ValueError, AttributeError):
             return 0.0
     
